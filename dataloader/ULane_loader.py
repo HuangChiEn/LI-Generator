@@ -8,14 +8,14 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import transforms
 import pytorch_lightning as pl
 
-
 class CULaneDataset(Dataset):
-    def __init__(self, ims_path_lst, labs_path_lst):
+    def __init__(self, ims_path_lst, labs_path_lst, transform=None):
         lab_ext = labs_path_lst[0].split('.')[-1]
         self.precompute_mask = bool(lab_ext == 'jpg')
         self.ims_path_lst = ims_path_lst
         self.labs_path_lst = labs_path_lst
-        
+        self.transform = transform
+
     def __len__(self):
         return len(self.ims_path_lst)
 
@@ -61,28 +61,35 @@ class CULaneDataset(Dataset):
         return mask
 
     def __getitem__(self, index):
-        img_path = self.ims_path_lst[index]
+        im_path = self.ims_path_lst[index]
+        image = Image.open(im_path).convert('RGB')
+        
         lab_path = self.labs_path_lst[index]
-        image = Image.open(img_path).convert('RGB')
-
         if self.precompute_mask:
             lane_mask = Image.open(lab_path).convert('RGB')
-        else:  # or activate runtime mask computation 
+        else:  # activate runtime mask computation 
             W, H = image.size
             lanes_cord = self._parse_cords(lab_path)
             lane_mask = self._cord2mask(lanes_cord, mask_shape=[H, W, 3])
+
+        if self.transform:
+            image = self.transform(image)
 
         return image, lane_mask
 
 
 class CUL_datamodule(pl.LightningDataModule):
+    default_trfs = transforms.Compose([ transforms.ToTensor() ])
+
     # Since CULane dataset use jpg, txt as im, labe format, we just hard-code
-    def __init__(self, data_dir: str = '.', lab_ext: str = 'txt', batch_size: int = 32, val_ratio: int = 0):
+    def __init__(self, data_dir: str = '.', lab_ext: str = 'txt', val_ratio: int = 0, data_ld_args: dict = None):
         super().__init__()
         self.data_dir = data_dir
-        self.batch_size = batch_size
         self.val_ratio = val_ratio
         self.lab_ext = lab_ext
+
+        self._train_trfs = self._test_trfs = CUL_datamodule.default_trfs
+        self.data_ld_args = data_ld_args
         self.tst_ds = None
 
     def setup(self):
@@ -91,24 +98,30 @@ class CUL_datamodule(pl.LightningDataModule):
         val_cnt = self.val_ratio * len(ims_path)
         tra_cnt = len(ims_path) - val_cnt
 
-        all_ds = CULaneDataset(ims_path, labs_path)
+        all_ds = CULaneDataset(ims_path, labs_path, transform=self._train_trfs)
         self.tra_ds, self.val_ds = random_split(all_ds, [tra_cnt, val_cnt])
 
     def train_dataloader(self):
-        return DataLoader(self.tra_ds, batch_size=self.batch_size)
+        data_ld_args = self.data_ld_args if self.data_ld_args \
+                            else {'batch_size':32, 'pin_memory':True}
+        return DataLoader(self.tra_ds, **data_ld_args)
 
     def val_dataloader(self):
-        return DataLoader(self.val_ds, batch_size=self.batch_size)
+        data_ld_args = self.data_ld_args if self.data_ld_args \
+                            else {'batch_size':32, 'pin_memory':True}
+        return DataLoader(self.val_ds, **data_ld_args)
 
     # testing dataloader, plz exec extra-call for test_setup
     def test_setup(self, test_dir: str, lab_ext: str):
         ims_path = sorted(glob(f'{self.data_dir}/**/*.jpg'))
         labs_path = sorted(glob(f'{self.data_dir}/**/*.{lab_ext}'))
-        self.tst_ds = CULaneDataset(ims_path, labs_path)
+        self.tst_ds = CULaneDataset(ims_path, labs_path, transform=self._test_trfs)
 
     def test_dataloader(self):
+        data_ld_args = self.data_ld_args if self.data_ld_args \
+                            else {'batch_size':32, 'pin_memory':True}
         if self.tst_ds:
-            return DataLoader(self.tst_ds, batch_size=self.batch_size)
+            return DataLoader(self.tst_ds, **data_ld_args)
         else:
             raise RuntimeError("test dataset is not initialized, plz call test_setup function")
 
@@ -123,9 +136,42 @@ class CUL_datamodule(pl.LightningDataModule):
             lanes_cord = cul_ds._parse_cords(lab_path)
             lane_mask = cul_ds._cord2mask(lanes_cord, mask_shape=[H, W, 3])
 
+            lane_mask = CUL_datamodule.tnsr2cvarr(lane_mask, mask=True)
             save_prefix = lab_path.split('.')[0]
             cv2.imwrite(f'{save_prefix}_msk.jpg', lane_mask)
 
+    # utils for saving tensor image
+    @staticmethod
+    def tnsr2cvarr(tnsr, mask=False):
+        np_arr = tnsr.cpu().detach().numpy()
+        if mask:
+            return np_arr
+
+        # float32 --> uint8 with range [0, 255]
+        np_arr = np.uint8( np_arr*255 / np_arr.max() )  
+        # channel last format
+        return cv2.cvtColor( np_arr.transpose(1,2,0), cv2.COLOR_BGR2RGB)
+
+    # torch transformer properties : 
+    @property
+    def train_trfs(self):
+        return self._train_trfs
+    
+    @train_trfs.setter
+    def train_trfs(self, trfs):
+        if isinstance(trfs):
+            raise RuntimeError(f"The given transformer should be type torch.Transformer, instead of {type(trfs)}!!")
+        self._train_trfs = trfs
+
+    @property
+    def test_trfs(self):
+        return self._test_trfs
+    
+    @train_trfs.setter
+    def test_trfs(self, trfs):
+        if isinstance(trfs):
+            raise RuntimeError(f"The given transformer should be type torch.Transformer, instead of {type(trfs)}!!")
+        self._test_trfs = trfs
 
 # doctest
 if __name__ == '__main__':
