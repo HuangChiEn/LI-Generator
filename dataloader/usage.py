@@ -1,5 +1,4 @@
 from ULane_loader import CUL_datamodule
-import numpy as np
 
 if __name__ == "__main__":
     import cv2
