@@ -6,7 +6,7 @@ lightning-bolts>=0.5.0
 timm==0.6.7
 tqdm
 einops
-easy_configer==1.2
+easy_configer
 wandb
 scipy
 scikit-learn
