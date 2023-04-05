@@ -51,6 +51,7 @@ class Generator(nn.Module):
         ans_feat = list()
         x = self.first_linear(z)
         for i in range(self.num_blocks):
+            print(x.shape)
             x = self.body[i](x)
             im = torch.tanh(self.rgb_converters[i](x))
             ans_images.append(im)
