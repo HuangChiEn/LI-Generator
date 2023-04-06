@@ -39,16 +39,17 @@ class Encoder(nn.Module):
         for i in range(len(self.mask_encoder)):
             mask = self.mask_encoder[i](mask)
             print(mask.shape)
+        mask = torch.squeeze(mask)
         return mask
     def forward(self, image, mask):
-
-        return self.get_image_embeding(image), self.get_mask_embeding(mask)
+        y = torch.cat((self.get_image_embeding(image), self.get_mask_embeding(mask)) , dim = 1)
+        return y
 
 if __name__ == '__main__':
     generator = Encoder("ViT-B/32",8,2,512,"batch")
     x = torch.rand(2, 3, 224, 224)
     y = torch.rand(2, 2, 224, 224)
-    x, mask = generator(x, y)
+    x = generator(x, y)
     print(x.shape)
-    print(mask.shape)
+    #print(mask.shape)
 
