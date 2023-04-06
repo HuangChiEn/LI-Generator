@@ -12,16 +12,18 @@ class BaseMethod(pl.LightningModule):
                  mask_out_dim,
                  norm_name,
                  G_num_blocks,
-                 input_shape,
-                 input_dim,
+                 G_input_shape,
+                 G_input_dim,
                  no_masks,
                  num_mask_channels
                  ):
         super().__init__()
         self.encoder = Encoder(clip_version, mask_num_blocks, num_mask_channels , mask_out_dim, norm_name)
-        self.generator = Generator(G_num_blocks, norm_name, input_shape, input_dim, no_masks, num_mask_channels)
 
         self.mix_layer = nn.Linear(512 + mask_out_dim, input_dim)
+
+        self.generator = Generator(G_num_blocks, norm_name, G_input_shape, G_input_dim, no_masks, num_mask_channels)
+
 
         self.mask_loss_fun = nn.CrossEntropyLoss()
 
