@@ -32,43 +32,46 @@ class Generator(nn.Module):
         self.norm_name = norm_name
         self.no_masks = no_masks
         self.num_mask_channels = num_mask_channels
-        num_of_channels = ([8, 8, 8, 8, 8, 8, 8, 4, 2, 1] * 32)[-self.num_blocks-1:]
+        num_of_channels = ([256, 256, 256, 256, 256, 256, 256, 128, 128, 64, 32])[-self.num_blocks-1:]
 
-        self.body, self.rgb_converters = nn.ModuleList([]), nn.ModuleList([])
+        self.body = nn.ModuleList([])
+        self.cur_rgb = None
         self.first_linear = nn.ConvTranspose2d(self.input_dim, num_of_channels[0], self.input_shape)
         for i in range(self.num_blocks):
             cur_block = G_block(num_of_channels[i], num_of_channels[i+1], self.norm_name, i==0)
-            cur_rgb  = sp_norm(nn.Conv2d(num_of_channels[i+1], 3, (3, 3), padding=(1, 1), bias=True))
             self.body.append(cur_block)
-            self.rgb_converters.append(cur_rgb)
+        self.cur_rgb = sp_norm(nn.Conv2d(num_of_channels[-1], 3, (3, 3), padding = 1 , bias=True))
+
+            #self.rgb_converters.append(cur_rgb)
         if not self.no_masks:
             self.mask_converter = nn.Conv2d(num_of_channels[i+1], self.num_mask_channels, 3, padding=1, bias=True)
         print("Created Generator with %d parameters" % (sum(p.numel() for p in self.parameters())))
 
-    def forward(self, z, get_feat=False):
+    def forward(self, z, middle_feats = None):
         output = dict()
         ans_images = list()
         ans_feat = list()
         x = self.first_linear(z)
+        im = None
         for i in range(self.num_blocks):
-            print(x.shape)
+            # if i != 0:
+            #     print(x.shape, middle_feats[self.num_blocks-i-2].shape)
+            #     x = torch.cat((x, middle_feats[self.num_blocks-i-2]), dim = 1)
             x = self.body[i](x)
-            im = torch.tanh(self.rgb_converters[i](x))
-            ans_images.append(im)
-            ans_feat.append(torch.tanh(x))
-        output["images"] = ans_images
-
-        if get_feat:
-             output["features"] = ans_feat
+        im = torch.tanh(self.cur_rgb(x))
+        #
+        # if get_feat:
+        #      output["features"] = ans_feat
         if not self.no_masks:
             mask = self.mask_converter(x)
             mask = F.softmax(mask, dim=1)
-        return ans_images, mask
+        return im, mask
 
 class G_block(nn.Module):
     def __init__(self, in_channel, out_channel, norm_name, is_first):
         super(G_block, self).__init__()
         middle_channel = min(in_channel, out_channel)
+        #in_channel = in_channel*2 if not is_first else in_channel
         self.ups = nn.Upsample(scale_factor=2) if not is_first else torch.nn.Identity()
         self.activ = nn.LeakyReLU(0.2)
         self.conv1 = sp_norm(nn.Conv2d(in_channel,  middle_channel, 3, padding=1))
@@ -91,7 +94,7 @@ class G_block(nn.Module):
         return h + x
 
 if __name__ == '__main__':
-    generator = Generator(10,"batch",1,512,False,2)
+    generator = Generator(9,"batch",1,512,False,2)
     x = torch.rand(2,512,1,1)
     x, mask = generator(x)
     print(x[-1].shape)

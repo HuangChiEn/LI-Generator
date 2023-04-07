@@ -9,12 +9,15 @@ from torchvision import transforms
 import pytorch_lightning as pl
 
 class CULaneDataset(Dataset):
-    def __init__(self, ims_path_lst, labs_path_lst, transform=None):
+    def __init__(self, ims_path_lst, labs_path_lst, transform=None, lab_transform=None):
+        # print(ims_path_lst)
+        # print(labs_path_lst)
         lab_ext = labs_path_lst[0].split('.')[-1]
         self.precompute_mask = bool(lab_ext == 'jpg')
         self.ims_path_lst = ims_path_lst
         self.labs_path_lst = labs_path_lst
         self.transform = transform
+        self.lab_transform = lab_transform
 
     def __len__(self):
         return len(self.ims_path_lst)
@@ -61,12 +64,18 @@ class CULaneDataset(Dataset):
         return mask
 
     def __getitem__(self, index):
+
         im_path = self.ims_path_lst[index]
         image = Image.open(im_path).convert('RGB')
-        
+        #breakpoint()
         lab_path = self.labs_path_lst[index]
         if self.precompute_mask:
-            lane_mask = Image.open(lab_path).convert('RGB')
+            image_file = Image.open(lab_path).convert('L')
+            # Threshold
+            lane_mask = image_file.point(lambda p: 255 if p > 124 else 0).convert('1')
+            # lane_mask = torch.nn.functional.one_hot(lane_mask.long(), 2)
+            # lane_mask = lane_mask.view([2, image.shape[1], image.shape[2]])
+
         else:  # activate runtime mask computation 
             W, H = image.size
             lanes_cord = self._parse_cords(lab_path)
@@ -74,7 +83,10 @@ class CULaneDataset(Dataset):
 
         if self.transform:
             image = self.transform(image)
-
+        if self.lab_transform:
+            lane_mask = self.lab_transform(lane_mask)
+        lane_mask = torch.cat([lane_mask, 1-lane_mask], dim = 0)
+        #breakpoint()
         return image, lane_mask
 
 
@@ -82,23 +94,23 @@ class CUL_datamodule(pl.LightningDataModule):
     default_trfs = transforms.Compose([ transforms.ToTensor() ])
 
     # Since CULane dataset use jpg, txt as im, labe format, we just hard-code
-    def __init__(self, data_dir: str = '.', lab_ext: str = 'txt', val_ratio: int = 0, data_ld_args: dict = None):
+    def __init__(self, data_dir: str = '.', lab_ext: str = 'txt', val_ratio: float = 0.2, data_ld_args: dict = None):
         super().__init__()
         self.data_dir = data_dir
         self.val_ratio = val_ratio
         self.lab_ext = lab_ext
 
-        self._train_trfs = self._test_trfs = CUL_datamodule.default_trfs
+        self._train_trfs = self._train_lab_trfs = self._test_trfs = CUL_datamodule.default_trfs
         self.data_ld_args = data_ld_args
         self.tst_ds = None
 
-    def setup(self):
-        ims_path = sorted(glob(f'{self.data_dir}/**/*.jpg'))
-        labs_path = sorted(glob(f'{self.data_dir}/**/*.{self.lab_ext}'))
-        val_cnt = self.val_ratio * len(ims_path)
+    def setup(self, stage=None):
+        ims_path = sorted(glob(f'{self.data_dir}/**/*_im.jpg'))
+        labs_path = sorted(glob(f'{self.data_dir}/**/*_msk.{self.lab_ext}'))
+        val_cnt = int(self.val_ratio * len(ims_path))
         tra_cnt = len(ims_path) - val_cnt
 
-        all_ds = CULaneDataset(ims_path, labs_path, transform=self._train_trfs)
+        all_ds = CULaneDataset(ims_path, labs_path, transform=self._train_trfs,  lab_transform=self._train_lab_trfs)
         self.tra_ds, self.val_ds = random_split(all_ds, [tra_cnt, val_cnt])
 
     def train_dataloader(self):
@@ -159,9 +171,19 @@ class CUL_datamodule(pl.LightningDataModule):
     
     @train_trfs.setter
     def train_trfs(self, trfs):
-        if isinstance(trfs):
+        if isinstance(trfs, type(transforms)):
             raise RuntimeError(f"The given transformer should be type torch.Transformer, instead of {type(trfs)}!!")
         self._train_trfs = trfs
+
+    @property
+    def train_lab_trfs(self):
+        return self._train_lab_trfs
+
+    @train_trfs.setter
+    def train_lab_trfs(self, trfs):
+        if isinstance(trfs, type(transforms)):
+            raise RuntimeError(f"The given transformer should be type torch.Transformer, instead of {type(trfs)}!!")
+        self._train_lab_trfs = trfs
 
     @property
     def test_trfs(self):
@@ -169,7 +191,7 @@ class CUL_datamodule(pl.LightningDataModule):
     
     @train_trfs.setter
     def test_trfs(self, trfs):
-        if isinstance(trfs):
+        if isinstance(trfs, type(transforms)):
             raise RuntimeError(f"The given transformer should be type torch.Transformer, instead of {type(trfs)}!!")
         self._test_trfs = trfs
 
